@@ -104,8 +104,8 @@ edumentor/
 | Variable | Description | Default |
 |---|---|---|
 | `OPENAI_API_KEY` | API key for the LLM provider (required) | – |
-| `OPENAI_API_BASE` | Base URL for any OpenAI-compatible endpoint (e.g. OpenRouter) | OpenAI default |
-| `OPENAI_MODEL` | Model name to use | `openai/gpt-oss-120b` |
+| `OPENAI_API_BASE` | Base URL for any OpenAI-compatible endpoint | `https://openrouter.ai/api/v1` |
+| `OPENAI_MODEL` | Exact model name including variant suffix | `openai/gpt-oss-120b:free` |
 | `CORS_ORIGINS` | Comma-separated allowed origins | `http://localhost:3000` |
 
 ## References

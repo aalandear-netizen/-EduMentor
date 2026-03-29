@@ -1,8 +1,12 @@
 """
-AI Orchestrator service – wraps the OpenAI API to generate:
+AI Orchestrator service – wraps LangChain's ChatOpenAI to generate:
   - Explanations tailored to student level
   - Practice questions with structured JSON output
   - Adaptive feedback and hints
+
+Configured to use an OpenAI-compatible endpoint (default: OpenRouter) via
+``OPENAI_API_BASE``.  Set ``OPENAI_MODEL`` to the exact model name including
+any variant suffix (e.g. ``openai/gpt-oss-120b:free``).
 """
 from __future__ import annotations
 
@@ -10,7 +14,8 @@ import json
 import os
 from typing import Optional
 
-from openai import AsyncOpenAI
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 
@@ -51,20 +56,44 @@ LEVEL_LABELS = {
 
 
 class AIOrchestrator:
-    """Async OpenAI-compatible content generator for EduMentor.
+    """LangChain-based content generator for EduMentor.
 
-    Supports any OpenAI-compatible endpoint (e.g. OpenRouter) via the
-    ``OPENAI_API_BASE`` environment variable.  When set, it is forwarded as
-    ``base_url`` to the ``AsyncOpenAI`` client, enabling models such as
-    ``openai/gpt-oss-120b`` or ``openai/gpt-oss-20b`` served through
-    OpenRouter (https://openrouter.ai/api/v1).
+    Uses ``ChatOpenAI`` pointed at an OpenAI-compatible endpoint (default:
+    OpenRouter at https://openrouter.ai/api/v1).  Key environment variables:
+
+    - ``OPENAI_API_KEY``  – your OpenRouter (or other provider) API key
+    - ``OPENAI_MODEL``    – exact model name, e.g. ``openai/gpt-oss-120b:free``
+    - ``OPENAI_API_BASE`` – base URL (defaults to the OpenRouter endpoint)
     """
 
+    #: Hard-coded OpenRouter base URL; override with ``OPENAI_API_BASE`` if needed.
+    DEFAULT_API_BASE = "https://openrouter.ai/api/v1"
+
     def __init__(self) -> None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        self.model = os.getenv("OPENAI_MODEL", "openai/gpt-oss-120b")
-        base_url = os.getenv("OPENAI_API_BASE") or None
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.model = os.getenv("OPENAI_MODEL", "openai/gpt-oss-120b:free")
+        self.llm = ChatOpenAI(
+            model=self.model,
+            temperature=0.7,
+            max_tokens=1000,
+            request_timeout=60,
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            openai_api_base=os.getenv("OPENAI_API_BASE", self.DEFAULT_API_BASE),
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_messages(system: str, user: str) -> list:
+        return [SystemMessage(content=system), HumanMessage(content=user)]
+
+    @staticmethod
+    def _history_to_messages(history: list[dict]) -> list:
+        """Convert role/content dicts from the frontend into LangChain messages."""
+        _map = {"system": SystemMessage, "user": HumanMessage, "assistant": AIMessage}
+        return [_map.get(m.get("role", "user"), HumanMessage)(content=m.get("content", ""))
+                for m in history]
 
     # ------------------------------------------------------------------
     # Explanation generation
@@ -88,14 +117,8 @@ Description: {topic_description}
 
 Please provide a short, clear explanation (3–5 sentences) of this topic suitable for this student."""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            temperature=0.7,
-            max_tokens=400,
-        )
-        return response.choices[0].message.content or ""
+        response = await self.llm.ainvoke(self._build_messages(system, user))
+        return response.content or ""
 
     # ------------------------------------------------------------------
     # Question generation
@@ -122,15 +145,8 @@ Respond ONLY with a JSON object with these keys:
 - "explanation": step-by-step solution (2–4 sentences)
 - "hint": a helpful hint that does NOT reveal the answer (can be null)"""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            temperature=0.8,
-            max_tokens=500,
-            response_format={"type": "json_object"},
-        )
-        raw = response.choices[0].message.content or "{}"
+        response = await self.llm.ainvoke(self._build_messages(system, user))
+        raw = response.content or "{}"
         data = json.loads(raw)
         return QuestionResponse(
             question=data.get("question", ""),
@@ -162,14 +178,8 @@ Student's answer: {student_answer}
 
 Provide brief, encouraging feedback."""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            temperature=0.7,
-            max_tokens=200,
-        )
-        return response.choices[0].message.content or ""
+        response = await self.llm.ainvoke(self._build_messages(system, user))
+        return response.content or ""
 
     # ------------------------------------------------------------------
     # Diagnostic quiz assessment
@@ -198,15 +208,8 @@ Respond ONLY with JSON:
   "suggested_topic": "<topic_id from: arithmetic, pre_algebra, algebra_basics, algebra_intermediate, precalculus, calculus_limits, calculus_derivatives, calculus_integrals>"
 }}"""
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            temperature=0.3,
-            max_tokens=200,
-            response_format={"type": "json_object"},
-        )
-        raw = response.choices[0].message.content or "{}"
+        response = await self.llm.ainvoke(self._build_messages(system, user))
+        raw = response.content or "{}"
         data = json.loads(raw)
         return DiagnosticResult(
             level=data.get("level", "beginner"),
@@ -231,14 +234,10 @@ Respond ONLY with JSON:
             "and guide them without simply giving away answers to practice problems. "
             "Keep responses focused and appropriately detailed."
         )
-        messages = [{"role": "system", "content": system}]
-        messages.extend(history[-10:])  # keep last 10 turns for context
-        messages.append({"role": "user", "content": message})
+        messages = [SystemMessage(content=system)]
+        messages.extend(self._history_to_messages(history[-10:]))
+        messages.append(HumanMessage(content=message))
 
-        response = await self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=600,
-        )
-        return response.choices[0].message.content or ""
+        response = await self.llm.ainvoke(messages)
+        return response.content or ""
+
