@@ -14,6 +14,15 @@ def orchestrator(monkeypatch):
     return AIOrchestrator()
 
 
+@pytest.fixture
+def orchestrator_openrouter(monkeypatch):
+    """Orchestrator configured like an OpenRouter endpoint."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-or-test-dummy-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "openai/gpt-oss-120b")
+    return AIOrchestrator()
+
+
 def _make_completion(content: str):
     """Helper to build a mock ChatCompletion response."""
     choice = MagicMock()
@@ -105,3 +114,59 @@ async def test_chat(orchestrator):
             history=[],
         )
     assert result == mock_reply
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter / custom base_url tests
+# ---------------------------------------------------------------------------
+
+def test_openrouter_base_url_forwarded(orchestrator_openrouter):
+    """AsyncOpenAI client must receive the custom base_url from OPENAI_API_BASE."""
+    base = str(orchestrator_openrouter._client.base_url)
+    assert "openrouter.ai" in base
+
+
+def test_openrouter_model_name(orchestrator_openrouter):
+    """Model name must reflect OPENAI_MODEL env var (e.g. openai/gpt-oss-120b)."""
+    assert orchestrator_openrouter.model == "openai/gpt-oss-120b"
+
+
+def test_default_model_is_gpt_oss_120b(monkeypatch):
+    """Default model (no OPENAI_MODEL env var) should be openai/gpt-oss-120b."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy-key")
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    orch = AIOrchestrator()
+    assert orch.model == "openai/gpt-oss-120b"
+
+
+def test_gpt_oss_20b_model_name(monkeypatch):
+    """OPENAI_MODEL=openai/gpt-oss-20b must be picked up correctly."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy-key")
+    monkeypatch.setenv("OPENAI_API_BASE", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "openai/gpt-oss-20b")
+    orch = AIOrchestrator()
+    assert orch.model == "openai/gpt-oss-20b"
+
+
+def test_no_base_url_when_env_unset(monkeypatch):
+    """When OPENAI_API_BASE is not set, base_url should fall back to the default OpenAI URL."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy-key")
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    orch = AIOrchestrator()
+    # Default OpenAI base_url contains 'api.openai.com'
+    assert "openai.com" in str(orch._client.base_url)
+
+
+@pytest.mark.asyncio
+async def test_generate_explanation_with_openrouter(orchestrator_openrouter):
+    """generate_explanation works end-to-end with an OpenRouter-style orchestrator."""
+    mock_content = "Derivatives measure the rate of change of a function."
+    with patch.object(orchestrator_openrouter._client.chat.completions, "create",
+                      new=AsyncMock(return_value=_make_completion(mock_content))):
+        result = await orchestrator_openrouter.generate_explanation(
+            topic_label="Calculus – Derivatives",
+            topic_description="Differentiation rules and applications.",
+            level="intermediate",
+        )
+    assert result == mock_content

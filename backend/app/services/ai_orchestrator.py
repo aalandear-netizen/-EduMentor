@@ -51,12 +51,20 @@ LEVEL_LABELS = {
 
 
 class AIOrchestrator:
-    """Async OpenAI-backed content generator for EduMentor."""
+    """Async OpenAI-compatible content generator for EduMentor.
+
+    Supports any OpenAI-compatible endpoint (e.g. OpenRouter) via the
+    ``OPENAI_API_BASE`` environment variable.  When set, it is forwarded as
+    ``base_url`` to the ``AsyncOpenAI`` client, enabling models such as
+    ``openai/gpt-oss-120b`` or ``openai/gpt-oss-20b`` served through
+    OpenRouter (https://openrouter.ai/api/v1).
+    """
 
     def __init__(self) -> None:
         api_key = os.getenv("OPENAI_API_KEY")
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
-        self._client = AsyncOpenAI(api_key=api_key)
+        self.model = os.getenv("OPENAI_MODEL", "openai/gpt-oss-120b")
+        base_url = os.getenv("OPENAI_API_BASE") or None
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     # ------------------------------------------------------------------
     # Explanation generation
